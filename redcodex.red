@@ -60,11 +60,10 @@ config: [
 	]
 	colors: skins/:skin/colors
 	fonts:  skins/:skin/fonts
-	run-cmd: [call rejoin [
-		{start "" "%root%\storage\liquid\gear\Sublime Text 3\sublime_text.exe" "}
-		to-local-file clean-path filename
-		{"}
-	]]
+	run-cmd: [
+		call rejoin
+		[ {edit "} to-local-file clean-path filename {"} ]
+	]
 ]
 
 rules: context [
