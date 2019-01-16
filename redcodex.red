@@ -71,7 +71,8 @@ rules: context [
 	; so +123 and -123 are as perfect words as x123... is there an easy fix?
 	-whitespace-: charset "^(20)^-^M^/^(00A0)"
 	-not-word-char-: union -whitespace- charset {/\^^,[](){}"#%$@:;}
-	-not-word-1st-:  union -not-word-char- charset "0123465798'"
+	-word-prefix-:   union -not-word-char- charset "'" 	; index ['word] as [word]
+	-not-word-1st-:  union -word-prefix- charset "0123465798"
 	-word-1st-:  negate -not-word-1st-
 	-word-char-: negate -not-word-char-
 
@@ -82,7 +83,7 @@ rules: context [
 	-pos-: -wbgn-: -wend-: -wstr-: none  -wact-: []
 	; -wact-: [probe -wstr-]
 	-whole-word-: [-wbgn-: copy -wstr- -any-word- -wend-: (do -wact-)]
-	-line-: [opt -whole-word- any [thru [-not-word-char- -whole-word-]] to end]
+	-line-: [opt -whole-word- any [thru [-word-prefix- -whole-word-]] to end]
 ]
 
 
@@ -651,9 +652,13 @@ text-column: context [
 	]
 
 	calc-velocity: function [ps [block!]] [
-		dofs: (pick tail ps -2) - ps/1
-		dtim: (last ps) - to-time ps/2 // 24:0:0
-		either dtim > 0:0:0 [dofs/y * 1.0 / dtim/second][0.0]
+		r: 0.0
+		if 4 <= length? ps [
+			dofs: (pick tail ps -2) - ps/1
+			dtim: (last ps) - to-time ps/2 // 24:0:0
+			if dtim > 0:0:0 [r: dofs/y * 1.0 / dtim/second]
+		]
+		r
 	]
 
 	; since-last-point: func [ex [object!]] [
