@@ -3,13 +3,15 @@ Red [
 	Description: "Study the code base of the glorious language with comfort!"
 	Author: @hiiamboris
 	License: "GPLv3 - https://www.gnu.org/licenses/gpl-3.0.en.html"
-	Version: 0.1.0
+	Version: 0.1.1
 	Needs: View
 ]
 
 #include %glob.red
 
-; TODO: save/load subjects/paths ?
+; TODO: save/load subjects/paths, window size ?
+; TODO: search in text column itself / navigate around subjects with +-
+
 main: does [
 	config: object config
 	; BUG: this crashes if invoked after the build-index
@@ -22,6 +24,9 @@ main: does [
 config: [
 	skin: 'native
 	; skin: 'vaporwave
+
+	include-tests?: no
+	masks: ["*.reds" "*.red"]
 
 	skins: object [
 		vaporwave: object [
@@ -69,6 +74,7 @@ config: [
 rules: context [
 	; NOTE: `-` and `+` are normal 1st word chars
 	; so +123 and -123 are as perfect words as x123... is there an easy fix?
+	; + there's a special meaning to `a<b>` lexical patterns, not accounted for
 	-whitespace-: charset "^(20)^-^M^/^(00A0)"
 	-not-word-char-: union -whitespace- charset {/\^^,[](){}"#%$@:;}
 	-word-prefix-:   union -not-word-char- charset "'" 	; index ['word] as [word]
@@ -166,8 +172,11 @@ index: #()
 build-index: function [] [
 	unless exists? %red.r [print ["expected root directory of Red:" to-local-file what-dir] quit]
 	print "Building word index..."
-	fs: glob/only/files ["*.reds" "*.red"]
-	foreach f fs [index-file f]
+	fs: glob/only/files config/masks
+	foreach f fs pick [
+		[index-file f]
+		[unless find f "tests/" [index-file f]]
+	] config/include-tests?
 ]
 
 
@@ -312,17 +321,17 @@ text-column: context [
 			if x' <> fa/size/x [fa/size/x: x']
 		] [f f/extra]
 
-		; ;-- for files: automatically select something correct ---- doesn't work, react bugs
-		; react/link function [fa ex] [
-		; 	if ex/content-type = 'files [
-		; 		sel: min length? fa/text max 1 any [fa/selected 1] 	; = 0 if no files
-		; 		if all [0 < sel  sel <> fa/selected] [fa/selected: sel]
-		; 	]
-		; ] [f f/extra]
+		;-- for files: automatically select something correct
+		react/link function [fa ex] [
+			if ex/content-type = 'files [
+				sel: min length? fa/text max 1 any [fa/selected 1] 	; = 0 if no files
+				if all [0 < sel  sel <> fa/selected] [fa/selected: sel]
+			]
+		] [f f/extra]
 
 		;-- tie selected (integer) line => hilite
 		react/link function [fa ex] [
-			if all [fa/text fa/selected] [
+			if all [fa/selected fa/text 0 < length? fa/text] [
 				hl: hilite-for-line fa/text fa/selected
 				if hl <> ex/hilite [ex/hilite: hl]
 			]
@@ -463,7 +472,7 @@ text-column: context [
 		][
 			set [file line] skip face/data what/1 - 1 * 2
 			set-lazily 'next-sc/extra/path copy file
-			set-lazily 'next-sc/pane/1/text sub: copy sc/pane/1/text
+			set-lazily 'next-sc/pane/1/text sub: copy sc/pane/1/text 	;-- BUG: somehow `area` gets an extra newline...
 			set-lazily 'next-tc/extra/hilite hl: hilite-for-word next-tc line sub
 			ori: pan-to-hilite next-tc/extra/origin next-tc/size next-tc/text hl
 			set-lazily 'next-tc/extra/origin ori
@@ -504,6 +513,32 @@ text-column: context [
 		set-lazily 'face/selected line
 	]
 
+	select-subject: function [face [object!] 'selector [word!]] bind [
+		ex: face/extra
+		unless ex/subject [exit]
+		selector: get selector
+		either ex/hilite [
+			lines: at face/text ex/hilite/1
+			lines: selector lines
+		][
+			y: ex/origin/y + either same? :back :selector [0][face/size/y]
+			lines: second offset-to-cells 0x1 * y
+		]
+		found?: none
+		set '-wact- [if -wstr- = ex/subject [found?: index? lines]]
+		until [
+			ln: lines/1
+			parse ln -line-
+			if found? [
+				ex/hilite: hilite-for-word face found? ex/subject
+				set-lazily 'ex/origin pan-to-hilite ex/origin face/size face/text ex/hilite
+				break
+			]
+			lines: selector lines
+			any [head? lines  tail? lines]
+		]
+	] rules
+
 	focus-adjacent-column: function [face [object!] selector [any-function!]] [
 		pos: selector find face/parent/parent/pane face/parent
 		if all [pos/1  object? pos/1/extra  pos/1/extra/class = 'search-column] [
@@ -518,13 +553,13 @@ text-column: context [
 
 	pan-to-hilite: function [origin [pair!] size [pair!] text [block!] hl [block!]] [
 		pos1: cells-to-size -1x-1 + as-pair index? hl/2 hl/1
-		pos2: cells-to-size as-pair index? hl/3 hl/1
+		pos2: cells-to-size -1x0  + as-pair index? hl/3 hl/1
 		pos1: pos1 - origin
 		pos2: pos2 - origin
 		r: origin
-		if pos2/y >= size/y 	[ r/y: r/y + pos2/y - (size/y / 4 * 3) ]
+		if pos2/y > size/y 	[ r/y: r/y + pos2/y - (size/y / 4 * 3) ]
 		if pos1/y < 0			[ r/y: r/y + pos1/y - (size/y / 4) ]
-		if pos2/x >= size/x 	[ r/x: r/x + pos2/x - size/x ]
+		if pos2/x > size/x 	[ r/x: r/x + pos2/x - size/x ]
 		if pos1/x < 0			[ r/x: r/x + pos1/x ]
 		canvas: cells-to-size as-pair 120 length? text
 		normalize-origin r canvas size
@@ -802,13 +837,14 @@ system/view/VID/styles/text-column: bind [
 
 			on-time: function [fa ev] [
 				ex: fa/extra
+				t: now/time/precise
 				either ex/dragging? [
 					; save 
 					record-point ex 0:0:0.1
 					ex/velocity: calc-velocity ex/points
 				][
 					if 0 <> ex/velocity [ 	; panning?
-						dt: (t: now/time/precise) - to-time ex/last-time // 24:0:0
+						dt: t - to-time ex/last-time // 24:0:0
 						dy: round/to ex/velocity * dt/second 1
 						if 0 = scroll fa down dy [ 	; stop if hit top/bottom
 							ex/velocity: 0.0
@@ -820,7 +856,7 @@ system/view/VID/styles/text-column: bind [
 
 			on-dbl-click: function [fa ev] [
 				if fa/extra/content-type = 'files [
-					n: second offset-to-cells ev/offset
+					n: second offset-to-cells fa/extra/origin + ev/offset
 					filename: pick fa/data n * 2 + 1
 					do bind config/run-cmd 'filename
 				]
@@ -849,7 +885,9 @@ system/view/VID/styles/text-column: bind [
 					; sample the path more often:
 					fa/actors/on-time fa ev
 				][	; hilite the word under the pointer
-					set-lazily 'ex/hilite get-content-at fa ev/offset
+					if all [not ev/away?  hl: get-content-at fa ev/offset] [
+						set-lazily 'ex/hilite hl
+					]
 				]
 			]
 
@@ -871,6 +909,8 @@ system/view/VID/styles/text-column: bind [
 						up    [scroll f up   20%]
 						page-down [scroll f down 80%]
 						page-up   [scroll f up   80%]
+						#"+"	[select-subject f next]
+						#"-"	[select-subject f back]
 					]
 				][
 					switch e/key [
@@ -947,6 +987,7 @@ make-view: does [
 		scrr: scroller 800x20 with [extra/target: columns]
 	] [resize] [
 		offset: 0x0
+		text: "Red Source Code Explorer"
 		actors: object [
 
 			on-created: func [f] [
