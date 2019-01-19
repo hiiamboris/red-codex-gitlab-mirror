@@ -855,8 +855,9 @@ system/view/VID/styles/text-column: bind [
 			]
 
 			on-dbl-click: function [fa ev] [
-				if fa/extra/content-type = 'files [
-					n: second offset-to-cells fa/extra/origin + ev/offset
+				ex: fa/extra
+				if all [ex/content-type = 'files ex/hilite] [
+					n: second offset-to-cells ex/origin + ev/offset
 					filename: pick fa/data n * 2 + 1
 					do bind config/run-cmd 'filename
 				]
