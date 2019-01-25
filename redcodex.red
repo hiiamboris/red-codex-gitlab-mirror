@@ -3,20 +3,25 @@ Red [
 	Description: "Study the code base of the glorious language with comfort!"
 	Author: @hiiamboris
 	License: "GPLv3 - https://www.gnu.org/licenses/gpl-3.0.en.html"
-	Version: 0.1.1
+	Version: 0.1.2
 	Needs: View
 ]
 
-#include %glob.red
+; TODO: save/load subjects/paths, window size, red root ?
+; TODO: destroy/hide columns to clean up the window
+; TODO: wish about lazier reactivity, like this one
 
-; TODO: save/load subjects/paths, window size ?
-; TODO: search in text column itself / navigate around subjects with +-
+try [#include %glob.red]
 
 main: does [
+	load-glob-module
+	locate-red-root
+	patch-w8+bugs
 	config: object config
 	; BUG: this crashes if invoked after the build-index
-	config/fonts/cell-size: determine-cell-size config/fonts/fixed
 	clock [build-index]
+	config/fonts/cell-size: determine-cell-size config/fonts/fixed
+	relax-reactivity
 	make-view
 	quit
 ]
@@ -51,7 +56,7 @@ config: [
 			colors: object [
 				foreground: system/view/metrics/colors/text
 				background: system/view/metrics/colors/window
-				hilite: selection: comment: color-mix background foreground 2.0
+				hilite: selection: comment: color-mix/pure background foreground 2.0
 				hilite-background: color-mix background foreground -0.3
 			]
 			fonts: object [
@@ -95,9 +100,10 @@ rules: context [
 
 color-mix: function [c0 [tuple!] c1 [tuple!] mix [number!] /pure] [
 	c: copy [0.0 0.0 0.0]
-	repeat i 3 [c/:i: mix * c1/:i + c0/:i]
+	repeat i 3 [c/:i: (c1/:i * max 0.0 mix) + (c0/:i * max 0.0 1.0 - mix)]
 	hi: max max c/1 c/2 c/3
 	lo: min min c/1 c/2 c/3
+	if lo = hi [lo: lo - 1]
 	if 255 < hi [
 		repeat i 3 [
 			c/:i: c/:i - (hi - 255.0 * (c/:i - lo) / (hi - lo))
@@ -105,7 +111,6 @@ color-mix: function [c0 [tuple!] c1 [tuple!] mix [number!] /pure] [
 		hi: 255
 	]
 	if 0 > lo [
-		; print [hi lo]
 		repeat i 3 [
 			c/:i: c/:i - (lo * (hi - c/:i) / (hi - lo))
 		]
@@ -133,10 +138,6 @@ clone: func [c [char!] n [integer!]] [append/dup copy "" c n]
 
 ++: make op! func [s [string! block!] o [integer!]] [skip s o]
 
-set-lazily: func [path [path!] value [default!]] [
-	if :value <> get path [set path :value]
-]
-
 detab: function [x [block! string!]] [
 	either block? x [
 		forall x [detab x/1]
@@ -157,10 +158,16 @@ determine-cell-size: function [font [object!]] [
 		append/dup t (append clone #"x" 101 lf) 100
 		take/last t
 	]
-	rt: rtd-layout reduce [t]
-	rt/font: copy-font font
-	rt/size: 0x0
-	sz: size-text rt
+	size?: function [t] [
+		rt: rtd-layout reduce [t]
+		rt/font: copy-font font
+		rt/size: 0x0
+		size-text rt
+	]
+	unless equal? size? "I||I" size? "WXWQ" [
+		print ["Warning: the chosen font" font/name "is not monospaced and will work incorrectly!"]
+	]
+	sz: size? t
 	reduce [1e-2 * sz/x  1e-2 * sz/y]
 ]
 
@@ -170,7 +177,7 @@ index: #()
 ; value = #(%pathname = [line-number line-number ...] ...)
 
 build-index: function [] [
-	unless exists? %red.r [print ["expected root directory of Red:" to-local-file what-dir] quit]
+	unless exists? %red.r [print ["expected root directory of Red:" to-local-file what-dir] input quit]
 	print "Building word index..."
 	fs: glob/only/files config/masks
 	foreach f fs pick [
@@ -213,8 +220,11 @@ clock: func [code /local t1 t2] [
 set-focus*: :set-focus
 set-focus: function [f [object!]] [
 	set-focus* f
-	if all [f/actors  of: :f/actors/on-focus  not find [area field] f/type] [
-		of f none  	; fix for not working on-focus event
+	all [
+		f/actors
+		not find [area field] f/type
+		in f/actors 'on-focus
+		f/actors/on-focus f none  	; fix for not working on-focus event
 	]
 ]
 
@@ -265,26 +275,25 @@ system/view/VID/styles/search-column: [
 
 				; tie type => tc/content-type
 				react/link func [faex tcex] [
-					if tcex/content-type <> faex/type [tcex/content-type: faex/type]
+					tcex/content-type: faex/type
 				] [face/extra tc/extra]
 				
 				; tie path => tc/file
 				react/link func [faex tcex] [
 					; print [faex/path tcex/file faex/type]
-					if all [
-						faex/type = 'text
-						tcex/file <> faex/path
-					] [tcex/file: copy faex/path]
+					if all [faex/type = 'text  faex/path] [
+						tcex/file: copy faex/path
+					]
 				] [face/extra tc/extra]
 				
 				; tie fl/text => tc/subject
 				react/link func [fl tcex] [
-					if tcex/subject <> fl/text [tcex/subject: copy fl/text]
+					if fl/text [tcex/subject: copy fl/text]
 				] [fl tc/extra]
 
 				face/pane: reduce [fl tc]
 
-				set-focus fl
+				unless buggy-w8+? [set-focus fl]
 			]
 		]
 	]
@@ -298,8 +307,12 @@ text-column: context [
 
 	init: function [f [object!]] [
 		
-		;-- tie data => text facets
-		react/link function [fa ex] [fa/text: form-data fa/data ex/content-type] [f f/extra]
+		;-- tie data => text facets & text => width
+		react/link function [fa ex] [
+			fa/text: form-data fa/data ex/content-type
+			x': to-integer first cells-to-size 1x1 * compute-width fa/text ex/content-type
+			if x' <> fa/size/x [fa/size/x: x']
+		] [f f/extra]
 
 		;-- tie file => text/data
 		react/link function [fa ex] [
@@ -315,25 +328,18 @@ text-column: context [
 			]
 		] [f f/extra]
 
-		;-- tie text => width inference
-		react/link function [fa ex] [
-			x': to-integer first cells-to-size 1x1 * compute-width fa/text ex/content-type
-			if x' <> fa/size/x [fa/size/x: x']
-		] [f f/extra]
-
 		;-- for files: automatically select something correct
 		react/link function [fa ex] [
 			if ex/content-type = 'files [
 				sel: min length? fa/text max 1 any [fa/selected 1] 	; = 0 if no files
-				if all [0 < sel  sel <> fa/selected] [fa/selected: sel]
+				if 0 < sel [fa/selected: sel]
 			]
 		] [f f/extra]
 
 		;-- tie selected (integer) line => hilite
 		react/link function [fa ex] [
 			if all [fa/selected fa/text 0 < length? fa/text] [
-				hl: hilite-for-line fa/text fa/selected
-				if hl <> ex/hilite [ex/hilite: hl]
+				ex/hilite: hilite-for-line fa/text fa/selected
 			]
 		] [f f/extra]
 
@@ -359,9 +365,7 @@ text-column: context [
 			f/extra/origin: pan-to-hilite f/extra/origin f/size f/text f/extra/hilite
 		]
 
-		; print ">>>>>>"
 		react/link/later :render-text [f f/extra]
-		; print "<<<<<"
 	]
 
 	form-data: function [data [block! none!] type [word!]] [
@@ -393,6 +397,11 @@ text-column: context [
 		cs: config/fonts/cell-size
 		lh: round/to cs/2 1
 		as-pair  to-integer cells/x * cs/1  cells/y * lh
+	]
+
+	get-line-number: func [f [object!] o [pair!] /abs] [
+		unless abs [o: o + f/extra/origin]
+		1 + second offset-to-cells o * 0x1
 	]
 
 	hilite-for-line: func [text [block!] n [integer!] /local ln] [
@@ -471,11 +480,10 @@ text-column: context [
 			next-sc/pane/1/text: w
 		][
 			set [file line] skip face/data what/1 - 1 * 2
-			set-lazily 'next-sc/extra/path copy file
-			set-lazily 'next-sc/pane/1/text sub: copy sc/pane/1/text 	;-- BUG: somehow `area` gets an extra newline...
-			set-lazily 'next-tc/extra/hilite hl: hilite-for-word next-tc line sub
-			ori: pan-to-hilite next-tc/extra/origin next-tc/size next-tc/text hl
-			set-lazily 'next-tc/extra/origin ori
+			next-sc/extra/path: copy file
+			next-sc/pane/1/text: sub: copy sc/pane/1/text 	;-- BUG: somehow `area` gets an extra newline...
+			next-tc/extra/hilite: hl: hilite-for-word next-tc line sub
+			next-tc/extra/origin: pan-to-hilite next-tc/extra/origin next-tc/size next-tc/text hl
 		]
 		pan-to-show-face next-sc
 	]
@@ -496,7 +504,7 @@ text-column: context [
 		]
 		newy: second normalize-origin  0x1 * newy  0x1 * h  face/size
 		also newy - ex/origin/y
-			set-lazily 'ex/origin/y newy
+			ex/origin/y: newy
 	]
 
 	select-line: function [face [object!] 'line [word! integer! percent!]] [
@@ -510,7 +518,7 @@ text-column: context [
 			]
 		]
 		line: max 1 min (length? face/data) / 2 line
-		set-lazily 'face/selected line
+		face/selected: line
 	]
 
 	select-subject: function [face [object!] 'selector [word!]] bind [
@@ -521,8 +529,8 @@ text-column: context [
 			lines: at face/text ex/hilite/1
 			lines: selector lines
 		][
-			y: ex/origin/y + either same? :back :selector [0][face/size/y]
-			lines: second offset-to-cells 0x1 * y
+			y: either same? :back :selector [0][face/size/y]
+			lines: -1 + get-line-number face y
 		]
 		found?: none
 		set '-wact- [if -wstr- = ex/subject [found?: index? lines]]
@@ -531,7 +539,7 @@ text-column: context [
 			parse ln -line-
 			if found? [
 				ex/hilite: hilite-for-word face found? ex/subject
-				set-lazily 'ex/origin pan-to-hilite ex/origin face/size face/text ex/hilite
+				ex/origin: pan-to-hilite ex/origin face/size face/text ex/hilite
 				break
 			]
 			lines: selector lines
@@ -591,8 +599,7 @@ text-column: context [
 				fa1: max mrg fa1  fa2: fa1 + fa/size
 				fa2: min fa2 wis  fa1: fa2 - fa/size
 				cvo: fa1 - fa/offset
-				cvo: 0x0 - normalize-origin 0x0 - cvo cv/size wi/size
-				set-lazily 'cv/offset cvo
+				cv/offset: 0x0 - normalize-origin 0x0 - cvo cv/size wi/size
 			]
 		]
 	]
@@ -713,7 +720,7 @@ scroller: context [
 	set-target: function [extra [object! none!] target [object! none!]] [
 		; print ["set target of" either extra [class-of extra][none] "to" either target [class-of target][none]]
 		if all [extra  not same? t2: target t1: extra/auto-target] [
-			all [t1  react/unlink :on-move [extra t1] print "unlink"]
+			all [t1  react/unlink :on-move [extra t1]]
 			all [t2  react/link   :on-move [extra t2]]
 		]
 		target
@@ -736,7 +743,7 @@ scroller: context [
 			max 0.0 0.0 - offset / content
 			min 1.0 0.0 - offset + frame / content
 		]
-		if used <> extra/used [extra/used: used]
+		extra/used: used
 	]
 
 	render-geom: function [face [object!] extra [object!]] [
@@ -746,7 +753,7 @@ scroller: context [
 		x1: sz/x * max 0 min 1 any [extra/used/1 0]
 		x2: sz/x * max 0 min 1 any [extra/used/2 1]
 		vis: all [x2 > x1  x2 - x1 < sz/x]
-		if vis <> face/visible? [face/visible?: vis]
+		face/visible?: vis
 		face/draw: collect [
 			if vis [
 				if sz/y > sz/x [keep [matrix [0 1 1 0 0 0]]]
@@ -818,6 +825,7 @@ system/view/VID/styles/text-column: bind [
 			origin: 0x0
 			drag-origin: 0x0
 			dragging?: no
+			moved?: no
 			velocity: 0.0
 			last-time: now/time/precise
 			hilite: none
@@ -846,6 +854,7 @@ system/view/VID/styles/text-column: bind [
 					if 0 <> ex/velocity [ 	; panning?
 						dt: t - to-time ex/last-time // 24:0:0
 						dy: round/to ex/velocity * dt/second 1
+						ex/moved?: yes
 						if 0 = scroll fa down dy [ 	; stop if hit top/bottom
 							ex/velocity: 0.0
 						]
@@ -857,9 +866,10 @@ system/view/VID/styles/text-column: bind [
 			on-dbl-click: function [fa ev] [
 				ex: fa/extra
 				if all [ex/content-type = 'files ex/hilite] [
-					n: second offset-to-cells ex/origin + ev/offset
-					filename: pick fa/data n * 2 + 1
-					do bind config/run-cmd 'filename
+					n: get-line-number fa ev/offset
+					if filename: pick fa/data n * 2 - 1 [
+						do bind config/run-cmd 'filename
+					]
 				]
 			]
 
@@ -867,14 +877,25 @@ system/view/VID/styles/text-column: bind [
 				set-focus fa
 				ex: fa/extra
 				ex/velocity: 0.0
-				ex/drag-origin: ex/origin + ev/offset
-				ex/dragging?: yes
+				ex/moved?: no
+				unless ev/ctrl? [
+					ex/drag-origin: ex/origin + ev/offset
+					ex/dragging?: yes
+				]
 			]
 
 			on-up: function [fa ev] [
 				ex: fa/extra
 				clear ex/points
 				ex/dragging?: no
+				if all [ev/ctrl? ex/content-type = 'text] [
+					n: get-line-number fa ev/offset
+					base: https://github.com/red/red/blob/master/
+					browse rejoin [base ex/file "#L" n]
+				]
+				unless any [ev/ctrl?  ex/moved?  0 <> ex/velocity] [
+					fa/actors/on-alt-down fa ev
+				]
 			]
 
 			on-over: function [fa ev] [
@@ -882,17 +903,20 @@ system/view/VID/styles/text-column: bind [
 				either ev/down? [	; pan the view
 					ori: ex/drag-origin - ev/offset
 					if ori/x < 0 [ori/x: 0]
-					set-lazily 'ex/origin ori
+					ex/moved?: ori <> ex/origin
+					canvas: cells-to-size as-pair ex/origin/x + ev/offset/x length? fa/text
+					ori: normalize-origin ori canvas fa/size
+					ex/origin: ori
 					; sample the path more often:
 					fa/actors/on-time fa ev
 				][	; hilite the word under the pointer
 					if all [not ev/away?  hl: get-content-at fa ev/offset] [
-						set-lazily 'ex/hilite hl
+						ex/hilite: hl
 					]
 				]
 			]
 
-			on-wheel: func [fa ev] [
+			on-wheel': func [fa ev] [
 				scroll fa  (pick [up down] ev/picked > 0)  20%
 			]
 
@@ -930,51 +954,176 @@ system/view/VID/styles/text-column: bind [
 ] text-column
 
 
+; makes reactors lazy - only reacting when the value really changes
+relax-reactivity: function [] [
+
+	set 'reactor! make reactor! [
+		on-change**: :on-change*
+		on-change**: function [word old [any-type!] new [any-type!]] body-of :on-change*
+		on-change*: function spec-of :on-change** [
+			unless equal? :old :new [on-change** word :old :new]
+		]
+	]
+
+	set 'deep-reactor! make reactor! [
+		on-deep-change*: function [owner word target action new index part][
+			; print ["ON-DEEP-CHANGE!" :owner :word :target :action :new :index :part]
+			system/reactivity/check/only owner word
+		]
+	]
+
+]
+
+
+load-glob-module: has [e u1 u2] [
+	unless value? 'glob [
+		print "No GLOB module found, using the remote location..."
+		u1: https://gitlab.com/hiiamboris/red-junk/raw/master/glob/glob.red
+		u2: https://gist.githubusercontent.com/hiiamboris/605a4ab6831a247ac987789f4d578ef1/raw/a37dad12fb0f01307e8482e8e633b2bc6f5da403/glob.red
+		case [
+			not error? e: try [do u1]
+			not error? e: try [do u2]
+			true [
+				browse u1
+				view compose [area 400x250 wrap (form reduce [
+					"There was an error downloading the GLOB module:^/" mold e
+					"^/Please download it manually from^/" u1 "and restart"
+				])]
+				quit
+			]
+		]
+	]
+]
+
+locate-red-root: function [] [
+	there?: has [f] [
+		4 <= sum collect [
+			foreach f [%red.r %environment/ %modules/ %runtime/ %system/ %libRed/] [
+				if exists? f [keep 1]
+			]
+		]
+	]
+	unless there? [
+		print "Not in the root of Red source, relocating..."
+		write-clipboard as string! u: https://github.com/red/red/
+		msg: form reduce [
+			"This tool should have been started from the Red sources directory."
+			"Please get these from" u "and specify the location"
+		]
+		until [
+			unless d: request-dir/keep/dir/title what-dir msg [quit]
+			change-dir d
+			there?
+		]
+	]
+]
+
+
+patch-w8+bugs: has [o] [
+	o: os-info
+	buggy-w8+?: not find o/name "Windows 7"
+]
+
+
 make-view: does [
 	; config/fonts/cell-size: determine-cell-size config/fonts/fixed
 
 	insert-event-func function [f e] [
 		; unless find [drawing time] e/type [probe e/type]
-		; if e/type = 'wheel on-wheel: function [f e] [
-		; 			probe e/picked
-		; 		]
-		if all [e/type = 'key-down  e/key = tab] [
-			w: e/window
-			f-: none
-			foreach-face w [
-				; probe face/type
-				if any [
-					face/type = 'area
-					all [
-						face/type = 'base
-						true = try [face/extra/class = 'text-column]
-					]
+
+		; send wheel events to a face under the pointer
+		if e/type = 'wheel [
+			; feed the event to a child face
+			child: none
+			foreach-face e/window [
+				if all [
+					none? child
+					face/type = 'base
+					true = try [face/extra/class = 'text-column]
 				][
-					case [
-						same? face f [
-							if all [e/shift? f-] [set-focus f-]
-						]
-						same? f- f [
-							unless e/shift? [set-focus face]
-						]
+					o2: face/size + o1: face/offset
+					p: face
+					while [all [p: p/parent  p/type <> 'window]] [
+						o1: max o1 0x0  o2: min o2 p/size
+						o1: o1 + p/offset
+						o2: o2 + p/offset
 					]
-					f-: face
+					if within? e/offset o1 o2 - o1 [child: face]
 				]
 			]
-			return 'stop
-		]
-		if all [e/type = 'key-down  e/key = #"^M"  f/type = 'area] [
-			tc: second find f/parent/pane f
-			either 1 = length? tc/text [text-column/choose tc [1]] [
-				set-focus tc
+			all [
+				on-wheel: attempt [:child/actors/on-wheel']
+			 	on-wheel child e
 			]
-			return 'stop
+			'stop
+		]
+
+		if e/type = 'key-down [
+			case [
+
+				e/key = tab [
+					w: e/window
+					f-: none
+					foreach-face w [
+						; if f- [continue] 	; crashes
+						if any [
+							face/type = 'area
+							all [
+								face/type = 'base
+								true = try [face/extra/class = 'text-column]
+							]
+						][
+							case [
+								same? face f [
+									if all [e/shift? f-] [set-focus f-]
+								]
+								same? f- f [
+									unless e/shift? [set-focus face]
+								]
+							]
+							f-: face
+						]
+					]
+					return 'stop
+				]
+
+				all [e/key = #"^M"  f/type = 'area] [
+					tc: second find f/parent/pane f
+					either 1 = length? tc/text [text-column/choose tc [1]] [
+						set-focus tc
+					]
+					return 'stop
+				]
+
+				e/key = 'F1 [
+					view/flags compose [
+						area wrap 400x400 font-size 10 (form reduce [
+							"~ RedCodeX ~"
+							"^/https://gitlab.com/hiiamboris/red-codex^/"
+							"^/Controls list^/"
+							"^/Mouse:^/"
+							"- WHEEL or LEFT-click + HOLD to PAN the view^/"
+							"- LEFT-click / RIGHT-click to LOOKUP a word or open a file^/"
+							"- DOUBLE LEFT-click on a file to open it with `EDIT` command^/"
+							"- CTRL + LEFT-click on a line to open it on GITHUB in your browser^/"
+							"^/Keys:^/"
+							"- ordered TAB navigation^/"
+							"- LEFT/RIGHT to move between ADJACENT columns^/"
+							"- UP/DOWN/HOME/END/PAGEUP/PAGEDOWN to navigate in the column^/"
+							"- PLUS/MINUS to FIND next/previous subject in the text^/"
+							"^/Tips:^/"
+							"- add a '*' manually if you're looking for a native source: `prin:` -> `prin*:`"
+						])
+						return pad 300x0 button focus "KTHX!" [unview]
+					][modal]
+				]
+			]
 		]
 	]
 
-	view/flags/options compose [
+	view/tight/flags/options compose [
 		columns: panel [
-			search-column
+			at 0x0 search-column
 		] with [
 			; stretch panel to include all of it's children
 			react/link function [i o][
@@ -1004,27 +1153,10 @@ make-view: does [
 
 			on-close: func [f e] [clear-reactions]
 
-			on-resize: function [f e] [
-				; f/size: f/size 	; trick to get react triggered by window size change
-			]
+			; on-resize: function [f e] [
+			; 	; f/size: f/size 	; trick to get react triggered by window size change
+			; ]
 
-			on-wheel: function [w e] [
-				; feed the event to a child face
-				child: none
-				foreach-face w [
-					if all [
-						face/type = 'base
-						true = try [face/extra/class = 'text-column]
-						within? e/offset face/offset face/size
-					][
-						child: face
-					]
-				]
-				either child [
-					child/actors/on-wheel child e
-					'stop
-				]['done]
-			]
 		]
 	]
 ]
