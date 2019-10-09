@@ -10,7 +10,10 @@ Red [
 ; TODO: save/load subjects/paths, window size, red root ?
 ; TODO: destroy/hide columns to clean up the window
 ; TODO: wish about lazier reactivity, like this one
-
+; TODO: relax face!
+; TODO: more coloring when RTD is stable: []() */+-//(all operators) {strings} set-words: types! logics? as/declare/...(keywords)
+;       even better - mark words that are local to the function, those defined in the context, and those unknown (global?)
+recycle/off
 try [#include %glob.red]
 
 main: does [
@@ -27,8 +30,8 @@ main: does [
 ]
 
 config: [
-	skin: 'native
-	; skin: 'vaporwave
+	 skin: 'native
+;	skin: 'vaporwave
 
 	include-tests?: no
 	masks: ["*.reds" "*.red"]
@@ -961,7 +964,7 @@ relax-reactivity: function [] [
 		on-change**: :on-change*
 		on-change**: function [word old [any-type!] new [any-type!]] body-of :on-change*
 		on-change*: function spec-of :on-change** [
-			unless equal? :old :new [on-change** word :old :new]
+			unless strict-equal? :old :new [on-change** word :old :new]
 		]
 	]
 
@@ -1125,13 +1128,19 @@ make-view: does [
 		columns: panel [
 			at 0x0 search-column
 		] with [
-			; stretch panel to include all of it's children
-			react/link function [i o][
-				x': either empty? i/pane
-					[ o/size/x - (i/offset/x * 2) ]
-					[ f: last i/pane  f/size/x + f/offset/x ]
-				if x' <> i/size/x [i/size/x: x']
-			] [self parent]
+			; auto stretching logic
+			extra: is (bind [
+				if extra <> last pane [
+					react/unlink :fn 'all
+					unless empty? pane [react/link :fn [context? 'extra last pane]]
+				]
+				last pane
+			] context [
+				fn: function [fa ex] [
+					x': ex/size/x + ex/offset/x
+					if x' <> fa/size/x [fa/size/x: x']
+				]
+			])
 		]
 		return
 		scrr: scroller 800x20 with [extra/target: columns]
