@@ -13,7 +13,7 @@ Red [
 ; TODO: relax face!
 ; TODO: more coloring when RTD is stable: []() */+-//(all operators) {strings} set-words: types! logics? as/declare/...(keywords)
 ;       even better - mark words that are local to the function, those defined in the context, and those unknown (global?)
-recycle/off
+
 try [#include %glob.red]
 
 main: does [
@@ -30,8 +30,8 @@ main: does [
 ]
 
 config: [
-	 skin: 'native
-;	skin: 'vaporwave
+	skin: 'native
+	skin: 'vaporwave
 
 	include-tests?: no
 	masks: ["*.reds" "*.red"]
@@ -244,6 +244,42 @@ place-after: function [f1 [object!] f2 [object!]] [
 	unless same? pos/1 f2 [change pos f2]
 ]
 
+; focal-face: function [w [object!]] [
+; 	while [face? w/selected] [w: w/selected]
+; 	w
+; ]
+
+context [
+    translate: func [xy fa op] [
+        until [
+            xy: xy op fa/offset
+            fa: fa/parent
+            fa/type = 'screen
+        ]
+        xy
+    ]
+
+    set 'face-to-screen func [
+        "Translate a point in face space into screen space"
+        xy [pair!] face [object!]
+    ][
+        translate xy face :+
+    ]
+
+    set 'screen-to-face func [
+        "Translate a point in screen space into face space"
+        xy [pair!] face [object!]
+    ][
+        translate xy face :-
+    ]
+
+    set 'face-to-face func [
+        "Translate a point from face1 space into face2 space"
+        xy [pair!] face1 [object!] face2 [object!]
+    ][
+        screen-to-face face-to-screen xy face1 face2
+    ]
+]
 
 last-used-id: 0
 
@@ -1037,26 +1073,24 @@ make-view: does [
 		; send wheel events to a face under the pointer
 		if e/type = 'wheel [
 			; feed the event to a child face
-			child: none
-			foreach-face e/window [
-				if all [
-					none? child
-					face/type = 'base
-					true = try [face/extra/class = 'text-column]
-				][
-					o2: face/size + o1: face/offset
-					p: face
-					while [all [p: p/parent  p/type <> 'window]] [
-						o1: max o1 0x0  o2: min o2 p/size
-						o1: o1 + p/offset
-						o2: o2 + p/offset
+			w: e/window
+			focal: e/face
+			abs-ofs: face-to-face e/offset focal w
+			if within? abs-ofs 0x0 w/size [		; has to be within window borders, ignore otherwise
+				child: none
+				foreach-face w [
+					if all [
+						none? child
+						face/type = 'base
+						true = try [face/extra/class = 'text-column]
+					][
+						if within? face-to-face abs-ofs w face 0x0 face/size [child: face]
 					]
-					if within? e/offset o1 o2 - o1 [child: face]
 				]
-			]
-			all [
-				on-wheel: attempt [:child/actors/on-wheel']
-			 	on-wheel child e
+				all [
+					on-wheel: attempt [:child/actors/on-wheel']
+				 	on-wheel child e
+				]
 			]
 			'stop
 		]
