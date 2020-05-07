@@ -7,12 +7,18 @@ Red [
 	Needs: View
 ]
 
+; TODO: rewire this using Elastic UI
+; TODO: an option to download Red sources automatically ?
+; TODO: highlight words in the text by a click; up/down navigation from a highlighted word using pointing devices
+; TODO: advanced query: list all words by a subword ?
 ; TODO: save/load subjects/paths, window size, red root ?
 ; TODO: destroy/hide columns to clean up the window
 ; TODO: wish about lazier reactivity, like this one
 ; TODO: relax face!
 ; TODO: more coloring when RTD is stable: []() */+-//(all operators) {strings} set-words: types! logics? as/declare/...(keywords)
 ;       even better - mark words that are local to the function, those defined in the context, and those unknown (global?)
+; TODO: switch to D2D rendering, as GDI+ font support is pathetic
+; TODO: autoupdate files that were changed; locate the closest match when target line does not contain it
 
 try [#include %glob.red]
 
@@ -109,13 +115,13 @@ color-mix: function [c0 [tuple!] c1 [tuple!] mix [number!] /pure] [
 	if lo = hi [lo: lo - 1]
 	if 255 < hi [
 		repeat i 3 [
-			c/:i: c/:i - (hi - 255.0 * (c/:i - lo) / (hi - lo))
+			c/:i: to integer! c/:i - (hi - 255.0 * (c/:i - lo) / (hi - lo))
 		]
 		hi: 255
 	]
 	if 0 > lo [
 		repeat i 3 [
-			c/:i: c/:i - (lo * (hi - c/:i) / (hi - lo))
+			c/:i: to integer! c/:i - (lo * (hi - c/:i) / (hi - lo))
 		]
 	]
 	repeat i 3 [c/:i: max 0 min 255 to-integer c/:i]
@@ -249,7 +255,7 @@ place-after: function [f1 [object!] f2 [object!]] [
 ; 	w
 ; ]
 
-context [
+context [	;@@ TODO: these are buggy as they do not consider non-client area size
     translate: func [xy fa op] [
         until [
             xy: xy op fa/offset
@@ -429,7 +435,7 @@ text-column: context [
 		if origin [ofs: ofs + origin]
 		cs: config/fonts/cell-size
 		lh: round/to cs/2 1
-		as-pair  to-integer ofs/x / cs/1  ofs/y / lh
+		as-pair  ofs/x / cs/1  ofs/y / lh
 	]
 
 	cells-to-size: function [cells [pair!]] [
@@ -556,7 +562,7 @@ text-column: context [
 				line: to-integer fit * line + any [face/selected 1]
 			]
 		]
-		line: max 1 min (length? face/data) / 2 line
+		line: max 1 min to integer! (length? face/data) / 2 line
 		face/selected: line
 	]
 
@@ -604,8 +610,8 @@ text-column: context [
 		pos1: pos1 - origin
 		pos2: pos2 - origin
 		r: origin
-		if pos2/y > size/y 	[ r/y: r/y + pos2/y - (size/y / 4 * 3) ]
-		if pos1/y < 0			[ r/y: r/y + pos1/y - (size/y / 4) ]
+		if pos2/y > size/y 	[ r/y: r/y + pos2/y - ((to integer! size/y / 4) * 3) ]
+		if pos1/y < 0			[ r/y: r/y + pos1/y -  (to integer! size/y / 4) ]
 		if pos2/x > size/x 	[ r/x: r/x + pos2/x - size/x ]
 		if pos1/x < 0			[ r/x: r/x + pos1/x ]
 		canvas: cells-to-size as-pair 120 length? text
